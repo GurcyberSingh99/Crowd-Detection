@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <title>Crowd Occupancy</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1020;--panel:#121a2d;--line:#24304a;--muted:#8d9ab4;--text:#eef3ff;--cyan:#6ee7d2;--blue:#82aaff}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% 0,#172744 0,transparent 42%),var(--bg);color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}
+    main{max-width:1120px;margin:auto;padding:48px 24px 36px}.top{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:32px}.eyebrow{text-transform:uppercase;letter-spacing:.16em;color:var(--cyan);font-size:11px;font-weight:700}.top h1{font-size:clamp(28px,4vw,40px);letter-spacing:-.04em;margin:5px 0 0}.status{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:13px}.dot{width:9px;height:9px;border-radius:50%;background:#f0b45b;box-shadow:0 0 14px currentColor}.dot.live{background:#51d6a5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:linear-gradient(145deg,rgba(21,31,52,.96),rgba(15,23,40,.96));border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:0 18px 50px #03071444}.metric{grid-column:span 1;min-height:196px;display:flex;flex-direction:column;justify-content:space-between}.label{color:var(--muted);font-size:13px}.count{font-size:clamp(54px,8vw,82px);font-weight:700;letter-spacing:-.07em;line-height:1;margin:14px 0}.occupancy{font-size:14px;color:var(--muted)}.badge{display:inline-flex;padding:6px 11px;border:1px solid var(--line);border-radius:999px;color:var(--cyan);font-weight:650;text-transform:capitalize;margin-left:5px}.badge.moderate{color:#f4cf72}.badge.high{color:#ffab68}.badge.critical{color:#ff7f91}.chart-card{grid-column:1/-1}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.card h2{font-size:15px;margin:0}.card-head span,.foot{font-size:12px;color:var(--muted)}canvas{width:100%;height:220px;display:block}.foot{display:flex;justify-content:space-between;margin-top:16px}.empty{color:var(--muted);text-align:center;padding:40px 0 0}@media(max-width:680px){main{padding:28px 16px}.top{align-items:flex-start;flex-direction:column;margin-bottom:20px}.grid{grid-template-columns:1fr}.metric{min-height:160px}.chart-card{grid-column:auto}.foot{gap:8px;flex-direction:column}}
+    .camera-card{grid-column:1/-1}.camera-stage{position:relative;background:#070b15;aspect-ratio:16/9;max-height:520px;overflow:hidden;border-radius:12px;border:1px solid var(--line)}.camera-stage video,.camera-stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.camera-stage canvas{pointer-events:none}.camera-placeholder{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);text-align:center;padding:24px}.camera-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:16px}.camera-controls button{border:0;border-radius:9px;padding:10px 15px;background:var(--cyan);color:#08201d;font-weight:700;cursor:pointer}.camera-controls button.secondary{background:#24304a;color:var(--text)}.camera-controls button:disabled{opacity:.55;cursor:wait}.camera-controls select{background:#0b1020;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px;max-width:100%}.camera-status{margin-left:auto;color:var(--muted);font-size:13px}@media(max-width:680px){.camera-status{width:100%;margin-left:0}}
+  </style>
+</head>
+<body>
+<main>
+  <header class="top"><div><div class="eyebrow">Live monitoring</div><h1>Crowd occupancy</h1></div><div class="status"><span id="dot" class="dot"></span><span id="connection">Connecting…</span></div></header>
+  <section class="grid">
+    <article class="card metric"><div class="label">People detected</div><div id="count" class="count">—</div><div class="occupancy">Current level <span id="level" class="badge">waiting</span></div></article>
+    <article class="card metric"><div class="label">Latest reading</div><div id="time" class="count" style="font-size:clamp(28px,5vw,46px)">—</div><div class="occupancy">Updates automatically every second</div></article>
+    <article class="card camera-card">
+      <div class="card-head"><h2>Live camera</h2><span>Person detection runs locally in this browser</span></div>
+      <div class="camera-stage"><video id="cameraVideo" autoplay playsinline muted hidden></video><canvas id="cameraOverlay" hidden></canvas><div id="cameraPlaceholder" class="camera-placeholder">Start camera to show the live feed and count people</div></div>
+      <div class="camera-controls"><button id="startCamera" type="button">Start camera</button><button id="stopCamera" class="secondary" type="button" disabled>Stop camera</button><select id="cameraDevice" aria-label="Camera device"><option value="">Default camera</option></select><span id="cameraStatus" class="camera-status">Camera is off</span></div>
+    </article>    <article class="card chart-card"><div class="card-head"><h2>Occupancy history</h2><span id="samples">Waiting for readings</span></div><canvas id="chart" aria-label="People detected over time"></canvas><div class="foot"><span>People detected</span><span id="range">Last 60 readings</span></div></article>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script>
+(() => {
+  const countEl=document.querySelector('#count'), levelEl=document.querySelector('#level'), timeEl=document.querySelector('#time'), dot=document.querySelector('#dot'), connection=document.querySelector('#connection'), samples=document.querySelector('#samples'), canvas=document.querySelector('#chart'), ctx=canvas.getContext('2d');
+  const video=document.querySelector('#cameraVideo'), overlay=document.querySelector('#cameraOverlay'), overlayCtx=overlay.getContext('2d'), placeholder=document.querySelector('#cameraPlaceholder'), cameraStatus=document.querySelector('#cameraStatus'), startButton=document.querySelector('#startCamera'), stopButton=document.querySelector('#stopCamera'), deviceSelect=document.querySelector('#cameraDevice');
+  let history=[],cameraStream=null,personModel=null,cameraActive=false,inferenceBusy=false,lastPostedCount=null,lastPostedAt=0;
+  function draw(){
+    const box=canvas.getBoundingClientRect(), ratio=window.devicePixelRatio||1; canvas.width=Math.max(1,Math.floor(box.width*ratio));canvas.height=Math.max(1,Math.floor(box.height*ratio));ctx.setTransform(ratio,0,0,ratio,0,0);
+    const w=box.width,h=box.height,pad={l:36,r:8,t:12,b:24},cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;ctx.clearRect(0,0,w,h);
+    if(!history.length){ctx.fillStyle='#8d9ab4';ctx.font='14px system-ui';ctx.textAlign='center';ctx.fillText('Waiting for occupancy data',w/2,h/2);return}
+    const vals=history.map(x=>Number(x.people_count)||0),max=Math.max(5,...vals),steps=4;ctx.font='11px system-ui';ctx.textAlign='right';
+    for(let i=0;i<=steps;i++){const y=pad.t+ch*i/steps,v=Math.round(max*(1-i/steps));ctx.strokeStyle='#25314a';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();ctx.fillStyle='#8d9ab4';ctx.fillText(v,pad.l-8,y+4)}
+    const points=vals.map((v,i)=>({x:pad.l+(vals.length===1?cw/2:i*cw/(vals.length-1)),y:pad.t+ch-(v/max)*ch}));
+    if(points.length>1){ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.lineTo(points.at(-1).x,pad.t+ch);ctx.lineTo(points[0].x,pad.t+ch);ctx.closePath();const grad=ctx.createLinearGradient(0,pad.t,0,pad.t+ch);grad.addColorStop(0,'#6ee7d233');grad.addColorStop(1,'#6ee7d200');ctx.fillStyle=grad;ctx.fill();ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.strokeStyle='#6ee7d2';ctx.lineWidth=2.5;ctx.lineJoin='round';ctx.stroke()}
+    const last=points.at(-1);ctx.beginPath();ctx.arc(last.x,last.y,4,0,Math.PI*2);ctx.fillStyle='#6ee7d2';ctx.fill();samples.textContent=`${history.length} reading${history.length===1?'':'s'}`;
+  }
+  function update(item){countEl.textContent=item.people_count??0;const level=item.occupancy_level||'low';levelEl.textContent=level;levelEl.className='badge '+level;const d=new Date(item.timestamp);timeEl.textContent=Number.isNaN(d.getTime())?'—':d.toLocaleTimeString();history.push(item);history=history.slice(-60);draw()}
+  function updateLatest(){const latest=history.at(-1);countEl.textContent=latest.people_count??0;const level=latest.occupancy_level||'low';levelEl.textContent=level;levelEl.className='badge '+level;const d=new Date(latest.timestamp);timeEl.textContent=Number.isNaN(d.getTime())?'—':d.toLocaleTimeString();draw()}
+  let pollTimer = null;
+  async function fetchSnapshot(){
+    try {
+      const [current, historyRes] = await Promise.all([
+        fetch('/api/current').then(r => r.ok ? r.json() : Promise.reject(new Error('Current status request failed'))),
+        fetch('/api/history').then(r => r.ok ? r.json() : Promise.reject(new Error('History request failed')))
+      ]);
+      if (current && current.people_count !== undefined) update(current);
+      if (Array.isArray(historyRes)) {
+        history = historyRes.slice(-60);
+        if (history.length) updateLatest(); else draw();
+      }
+      connection.textContent = 'Connected';
+      dot.classList.add('live');
+      if (!pollTimer) pollTimer = setInterval(fetchSnapshot, 1500);
+    } catch (error) {
+      console.warn('Server polling failed', error);
+      connection.textContent = 'API offline';
+      dot.classList.remove('live');
+    }
+  }
+  function connect(){
+    fetchSnapshot();
+    if (!('WebSocket' in window)) {
+      if (!pollTimer) pollTimer = setInterval(fetchSnapshot, 1500);
+      return;
+    }
+    const scheme=location.protocol==='https:'?'wss':'ws';
+    const ws=new WebSocket(`${scheme}://${location.host}/ws`);
+    ws.onopen=()=>{connection.textContent='Connected';dot.classList.add('live');if (pollTimer) {clearInterval(pollTimer);pollTimer=null;}};
+    ws.onmessage=event=>{try{const msg=JSON.parse(event.data);if(msg.type==='history'){history=(msg.data||[]).slice(-60);if(history.length)updateLatest();else draw()}else if(msg.type==='update')update(msg.data)}catch(e){console.error('Invalid update',e)}};
+    ws.onclose=()=>{connection.textContent='Reconnecting…';dot.classList.remove('live');setTimeout(connect,1800)};
+    ws.onerror=()=>ws.close();
+  }
+  function drawDetections(predictions){const w=video.videoWidth,h=video.videoHeight;if(!w||!h)return;if(overlay.width!==w||overlay.height!==h){overlay.width=w;overlay.height=h}overlayCtx.clearRect(0,0,w,h);overlayCtx.lineWidth=Math.max(2,w/480);overlayCtx.font=`${Math.max(15,w/42)}px system-ui`;for(const item of predictions){const [x,y,bw,bh]=item.bbox;overlayCtx.strokeStyle='#6ee7d2';overlayCtx.fillStyle='#6ee7d2';overlayCtx.strokeRect(x,y,bw,bh);overlayCtx.fillText(`Person ${Math.round(item.score*100)}%`,x+4,Math.max(20,y-6))}}
+  async function detectLoop(){if(!cameraActive||inferenceBusy)return;inferenceBusy=true;try{const predictions=await personModel.detect(video,30,.35),people=predictions.filter(item=>item.class==='person'&&item.score>=.35);drawDetections(people);const now=Date.now();if(people.length!==lastPostedCount||now-lastPostedAt>=1000){const response=await fetch('/api/camera/count',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({people_count:people.length})});if(!response.ok)throw new Error('Backend did not accept the camera count');lastPostedCount=people.length;lastPostedAt=now}cameraStatus.textContent=`Live · ${people.length} ${people.length===1?'person':'people'} detected`}catch(error){cameraStatus.textContent=`Detection error: ${error.message}`}finally{inferenceBusy=false;if(cameraActive)setTimeout(detectLoop,150)}}
+  function loadScript(src){return new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=src;script.onload=resolve;script.onerror=()=>reject(new Error('Could not load the person detection model. Check your internet connection and reload.'));document.head.appendChild(script)})}
+  async function loadModel(){if(personModel)return personModel;cameraStatus.textContent='Loading person detection model…';if(!window.tf)await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');if(!window.cocoSsd)await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');personModel=await window.cocoSsd.load({base:'lite_mobilenet_v2'});return personModel}
+  async function refreshDevices(){const devices=await navigator.mediaDevices.enumerateDevices(),cameras=devices.filter(d=>d.kind==='videoinput'),selected=deviceSelect.value;deviceSelect.replaceChildren(new Option('Default camera',''));cameras.forEach((d,i)=>deviceSelect.add(new Option(d.label||`Camera ${i+1}`,d.deviceId)));if(cameras.some(d=>d.deviceId===selected))deviceSelect.value=selected}
+  async function startCamera(){startButton.disabled=true;cameraStatus.textContent='Requesting camera permission…';try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera access is unavailable. Open this page on localhost or HTTPS.');const videoConstraints=deviceSelect.value?{deviceId:{exact:deviceSelect.value}}:{facingMode:{ideal:'environment'}};try{cameraStream=await navigator.mediaDevices.getUserMedia({video:videoConstraints,audio:false})}catch(e){cameraStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false})}video.srcObject=cameraStream;video.hidden=false;placeholder.hidden=true;overlay.hidden=false;await video.play();await refreshDevices();await loadModel();cameraActive=true;startButton.hidden=true;stopButton.disabled=false;cameraStatus.textContent='Camera active';detectLoop()}catch(error){if(cameraStream)cameraStream.getTracks().forEach(track=>track.stop());cameraStream=null;video.srcObject=null;video.hidden=true;overlay.hidden=true;placeholder.hidden=false;startButton.disabled=false;cameraStatus.textContent=error.name==='NotAllowedError'?'Camera permission denied. Allow camera access and try again.':error.message}}
+  async function stopCamera(){cameraActive=false;if(cameraStream)cameraStream.getTracks().forEach(track=>track.stop());cameraStream=null;video.pause();video.srcObject=null;video.hidden=true;overlay.hidden=true;overlayCtx.clearRect(0,0,overlay.width,overlay.height);placeholder.hidden=false;startButton.hidden=false;startButton.disabled=false;stopButton.disabled=true;cameraStatus.textContent='Camera is off';lastPostedCount=null;try{await fetch('/api/camera/stop',{method:'POST'})}catch(e){}}
+  startButton.addEventListener('click',startCamera);stopButton.addEventListener('click',stopCamera);deviceSelect.addEventListener('change',()=>{if(cameraActive){stopCamera().then(startCamera)}});window.addEventListener('pagehide',()=>{if(cameraStream)cameraStream.getTracks().forEach(track=>track.stop());navigator.sendBeacon?.('/api/camera/stop')});window.addEventListener('resize',draw);draw();connect();
+})();
+</script>
+</body>
+</html>
